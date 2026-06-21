@@ -7,6 +7,7 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 
@@ -127,10 +128,39 @@ public class LoginWindow {
         // ==================================================
         // 第 7 步：绑定事件监听器
         // ==================================================
-        // 7a. 登录按钮点击事件
-        //     第一阶段只打印日志，不连接服务器
+        // 7a. 登录按钮点击事件 — 表单验证 + MessageBox 反馈
         loginButton.addListener(SWT.Selection, event -> {
-            System.out.println("登录按钮被点击");
+            // 读取用户输入，去除首尾空白字符
+            String username = usernameText.getText().trim();
+            String password = passwordText.getText().trim();
+
+            // 校验 1：用户名为空 → 弹出警告对话框
+            if (username.isEmpty()) {
+                // MessageBox 是 SWT 的原生系统对话框
+                //   SWT.ICON_WARNING → 显示黄色警告图标
+                //   SWT.OK → 只显示一个"确定"按钮
+                MessageBox emptyUserBox = new MessageBox(shell, SWT.ICON_WARNING | SWT.OK);
+                emptyUserBox.setText("提示");               // 对话框标题栏文字
+                emptyUserBox.setMessage("请输入用户名");     // 对话框正文内容
+                emptyUserBox.open();                        // 打开对话框（模态：阻塞直到用户点击确定）
+                return;                                     // 提前返回，不再执行后续校验
+            }
+
+            // 校验 2：密码为空 → 弹出警告对话框
+            if (password.isEmpty()) {
+                MessageBox emptyPassBox = new MessageBox(shell, SWT.ICON_WARNING | SWT.OK);
+                emptyPassBox.setText("提示");
+                emptyPassBox.setMessage("请输入密码");
+                emptyPassBox.open();
+                return;
+            }
+
+            // 校验 3：用户名和密码均非空 → 弹出欢迎对话框
+            MessageBox welcomeBox = new MessageBox(shell, SWT.ICON_INFORMATION | SWT.OK);
+            welcomeBox.setText("登录成功");                  // SWT.ICON_INFORMATION → 蓝色信息图标
+            welcomeBox.setMessage("欢迎你：" + username);    // 拼接欢迎语
+            welcomeBox.open();
+            // TODO: 后续阶段此处将改为调用 ServerConnection 连接服务端验证
         });
 
         // 7b. 退出按钮点击事件
