@@ -14,19 +14,22 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+/**
+ * 多用户聊天服务端：监听端口 -> accept 客户端 -> 消息广播
+ */
 public class ServerApp {
     protected Shell shell;
     private Text textInformation;
     private Text textPort;
     private Button btnStart;
     private Button btnStop;
-    // 全局服务套接字，用于停止服务
     private ServerSocket server = null;
-    // 标记服务是否运行
     private volatile boolean isRunning = false;
 
-    // 新增：保存所有客户端输出流，用于广播消息，同步集合防止并发异常
-    private final List<PrintStream> clientOutList = Collections.synchronizedList(new ArrayList<>());
+    private final List<PrintStream> clientOutList =
+            Collections.synchronizedList(new ArrayList<>());
+    private final List<String> onlineUsers =
+            Collections.synchronizedList(new ArrayList<>());
 
     public static void main(String[] args) {
         try {
@@ -47,7 +50,6 @@ public class ServerApp {
                 display.sleep();
             }
         }
-        // 窗口关闭时释放服务
         stopServer();
     }
 
@@ -64,7 +66,6 @@ public class ServerApp {
         textPort.setBounds(115, 25, 140, 23);
         textPort.setText("8888");
 
-        // 启动按钮
         btnStart = new Button(shell, SWT.NONE);
         btnStart.setBounds(260, 23, 80, 27);
         btnStart.setText("开始监听");
@@ -86,13 +87,10 @@ public class ServerApp {
                     appendLog("端口输入不合法，请输入数字\r\n");
                     return;
                 }
-
-                // 新开线程启动服务
                 new Thread(() -> startServer(port)).start();
             }
         });
 
-        // 停止按钮
         btnStop = new Button(shell, SWT.NONE);
         btnStop.setBounds(345, 23, 80, 27);
         btnStop.setText("停止服务");
@@ -103,23 +101,23 @@ public class ServerApp {
             }
         });
 
-        // ========== 修复换行关键：增加 MULTI、WRAP、滚动条 ==========
-        textInformation = new Text(shell, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.READ_ONLY);
+        textInformation = new Text(shell,
+                SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.READ_ONLY);
         textInformation.setBounds(43, 68, 348, 190);
     }
 
-    // 统一日志输出方法，自带兼容换行
     private void appendLog(String msg) {
         Display.getDefault().asyncExec(() -> {
             if (!textInformation.isDisposed()) {
                 textInformation.append(msg);
-                // 自动滚动到底部
                 textInformation.setSelection(textInformation.getText().length());
             }
         });
     }
 
-    // 新增：广播消息给所有在线客户端
+    /**
+     * 广播消息给所有在线客户端
+     */
     private void broadcast(String msg) {
         synchronized (clientOutList) {
             for (PrintStream out : clientOutList) {
@@ -128,7 +126,14 @@ public class ServerApp {
         }
     }
 
-    // 启动服务逻辑
+    /**
+     * 启动服务：accept 循环，每客户端一个线程
+     *
+     * 协议：
+     *   PEOPLE:name   → 用户上线
+     *   MSG:...       → 群聊/私聊消息
+     *   QUIT          → 用户断开
+     */
     private void startServer(int port) {
         try {
             server = new ServerSocket(port);
@@ -137,29 +142,61 @@ public class ServerApp {
 
             while (isRunning && !server.isClosed()) {
                 Socket clientSocket = server.accept();
-                appendLog("用户连接服务器成功 " + clientSocket.getRemoteSocketAddress() + "\r\n");
+                appendLog("用户连接服务器成功 "
+                        + clientSocket.getRemoteSocketAddress() + "\r\n");
 
-                // 单客户端处理线程
                 new Thread(() -> {
                     BufferedReader clientIn = null;
                     PrintStream clientOut = null;
+                    String clientName = null;
                     try {
-                        clientIn = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-                        // true代表自动刷新缓冲区，消息立刻发出
-                        clientOut = new PrintStream(clientSocket.getOutputStream(), true);
-                        // 存入集合，用于广播
+                        clientIn = new BufferedReader(
+                                new InputStreamReader(clientSocket.getInputStream()));
+                        clientOut = new PrintStream(
+                                clientSocket.getOutputStream(), true);
                         clientOutList.add(clientOut);
 
                         String str;
                         while ((str = clientIn.readLine()) != null) {
-                            appendLog("收到消息：" + str + "\r\n");
-                            // 广播给全部客户端
-                            broadcast(str);
+                            if (str.startsWith("PEOPLE:")) {
+                                clientName = str.substring(7).trim();
+                                if (!clientName.isEmpty()
+                                        && !onlineUsers.contains(clientName)) {
+                                    onlineUsers.add(clientName);
+                                }
+                                // 广播完整在线用户列表
+                                StringBuilder sb = new StringBuilder("PEOPLE");
+                                synchronized (onlineUsers) {
+                                    for (String user : onlineUsers) {
+                                        sb.append(":").append(user);
+                                    }
+                                }
+                                broadcast(sb.toString());
+                            } else if (str.startsWith("QUIT")) {
+                                // 只回复请求者，不广播 QUIT
+                                if (clientOut != null) {
+                                    clientOut.println("QUIT");
+                                }
+                                break;
+                            } else {
+                                // MSG 等消息：广播给所有客户端
+                                broadcast(str);
+                            }
                         }
                     } catch (IOException ex) {
                         appendLog("客户端断开或IO异常\r\n");
                     } finally {
-                        // 下线移除输出流
+                        // 下线清理：移除在线用户 + 广播更新列表
+                        if (clientName != null) {
+                            onlineUsers.remove(clientName);
+                            StringBuilder sb = new StringBuilder("PEOPLE");
+                            synchronized (onlineUsers) {
+                                for (String user : onlineUsers) {
+                                    sb.append(":").append(user);
+                                }
+                            }
+                            broadcast(sb.toString());
+                        }
                         if (clientOut != null) {
                             clientOutList.remove(clientOut);
                             clientOut.close();
@@ -176,8 +213,8 @@ public class ServerApp {
             appendLog("服务器端口打开出错:" + e1.getMessage() + "\r\n");
         } finally {
             isRunning = false;
-            // 清空所有客户端连接
             clientOutList.clear();
+            onlineUsers.clear();
             appendLog("服务已停止监听\r\n");
             try {
                 if (server != null) server.close();
@@ -186,7 +223,6 @@ public class ServerApp {
         }
     }
 
-    // 停止服务
     private void stopServer() {
         isRunning = false;
         try {
